@@ -22,6 +22,9 @@ model.fit(X,y)
 
 app = FastAPI()
 
+class FileURI(BaseModel):
+    file_uri: str
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:8083", "http://localhost:8081"],  # Frontend origin
@@ -40,8 +43,8 @@ app.add_middleware(
     # return {"filename": file.filename, "file_size": len(content), "file_mime_type": file.content_type}
 
 @app.post("/uploadfile")
-async def upload_file(fileUri):
-    file_path = fileUri
+async def upload_file(data: FileURI):
+    file_path = data.file_uri
 
     try:
         with open(file_path, "rb") as f:
