@@ -1,23 +1,43 @@
+import os
+from fastapi import FastAPI, UploadFile, File
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 import pandas as pd
+import numpy as np
+from PIL import Image
+from fastapi.middleware.cors import CORSMiddleware
 
-data = pd.read_csv("color_names.csv")
+df = pd.read_csv(r"final_data.csv").dropna()
 
-r = data['Red (8 bit)']
-g = data['Green (8 bit)']
-b = data['Blue (8 bit)']
 
-y = data['Name']
-X = data[['Red (8 bit)', 'Green (8 bit)', 'Blue (8 bit)']]
-X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.8)
+X=df.iloc[:,:3]
+y = df.iloc[:,3]
 
-model = DecisionTreeClassifier()
-model.fit(X_train, y_train)
+model = DecisionTreeClassifier(max_depth=8,random_state=20251025)
 
-preds = model.predict([255, 255, 255])
-print(X_test)
-score = accuracy_score(y_test, preds)
+model.fit(X,y)
 
-print("score: " + str(score))
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8083", "http://localhost:8081"],  # Frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],  # GET, POST, etc.
+    allow_headers=["*"],
+)
+
+
+@app.post("/uploadfile")
+async def upload_file(file: UploadFile = File(...)):
+    content = await file.read()
+    print(file.file)
+    pix = Image.open(file.file).load()
+    print(pix[25,60])
+    # return {"filename": file.filename, "file_size": len(content), "file_mime_type": file.content_type}
+
+
+@app.get("/color")
+async def color_identify():
+    # INSERT COLOR ALGORITHM HERE
+    return 16
