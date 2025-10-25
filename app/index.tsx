@@ -1,11 +1,8 @@
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
-import { useRef, useState } from "react";
-import { Alert, Button, Dimensions, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Icon } from "react-native-paper";
-
-const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
+import React from "react";
+import { useState } from "react";
+import { Alert, Button, Dimensions, Image, View } from "react-native";
 
 export default function Index() {
   const [facing, setFacing] = useState<CameraType>("back");
