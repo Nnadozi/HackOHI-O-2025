@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 import pandas as pd
@@ -26,6 +26,16 @@ app.add_middleware(
     allow_methods=["*"],  # GET, POST, etc.
     allow_headers=["*"],
 )
+
+
+@app.post("/uploadfile")
+async def upload_file(file: UploadFile = File(...)):
+    content = await file.read()
+    print(file.file)
+    pix = Image.open(file.file).load()
+    print(pix[25,60])
+    # return {"filename": file.filename, "file_size": len(content), "file_mime_type": file.content_type}
+
 
 @app.get("/color")
 async def color_identify():
