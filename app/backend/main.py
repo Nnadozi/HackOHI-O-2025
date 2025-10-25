@@ -38,6 +38,6 @@ async def upload_file(file: UploadFile = File(...)):
 
 
 @app.get("/color")
-async def color_identify():
-    # INSERT COLOR ALGORITHM HERE
-    return 16
+async def color_identify(x,y,z):
+    data = pd.DataFrame([{"red": x, "green": y, "blue": z}])
+    return model.predict(data)[0]

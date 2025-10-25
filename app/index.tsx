@@ -1,6 +1,7 @@
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
-import React from "react";
+import { useRouter } from "expo-router";
+import React, { useRef } from "react";
 import { useState } from "react";
 import { Alert, Button, Dimensions, Image, View } from "react-native";
 
