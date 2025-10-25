@@ -28,6 +28,7 @@ export default function ResultScreen() {
   }>();
   const [objectLabel, setObjectLabel] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [color, setColor ] = useState("");
 
   useEffect(() => {
     if (imageUri) {
@@ -97,6 +98,22 @@ export default function ResultScreen() {
       } else {
         setObjectLabel("Unable to identify");
       }
+
+      const colorResponse = await fetch("http://localhost:8000/uploadfile", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ file_uri: imageUri }),
+      });
+
+      const fetchedColor = await colorResponse.json();
+
+      if (fetchedColor) {
+        setColor(fetchedColor);
+      } else {
+        setColor("Unable to identify color");
+      }
     } catch (error) {
       console.error("Error analyzing image:", error);
       setObjectLabel("Error analyzing image");
@@ -133,6 +150,11 @@ export default function ResultScreen() {
         {!isLoading && objectLabel && (
           <View style={styles.labelContainer}>
             <Text style={styles.labelText}>{objectLabel}</Text>
+          </View>
+        )}
+        {!isLoading && color && (
+          <View style={styles.labelContainer}>
+            <Text style={styles.labelText}>{color}</Text>
           </View>
         )}
       </View>
