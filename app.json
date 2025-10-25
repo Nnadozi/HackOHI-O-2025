@@ -38,6 +38,20 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow HackOHI-O-2025 to access your camera",
+          "microphonePermission": "Allow HackOHI-O-2025 to access your microphone",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow HackOHI-O-2025 to access your photos"
+        }
       ]
     ],
     "experiments": {
