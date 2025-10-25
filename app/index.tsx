@@ -1,23 +1,17 @@
+import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
-import { useState } from "react";
-import { Alert, Button, Dimensions, Image, View } from "react-native";
+import { useRouter } from "expo-router";
+import { useRef, useState } from "react";
+import { Alert, Button, Dimensions, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Icon } from "react-native-paper";
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
 
 export default function Index() {
-  const [image, setImage] = useState<string | null>(null);
-  const {width: screenWidth, height: screenHeight} = Dimensions.get("window");
-
-  // Request camera permissions
-  const requestCameraPermission = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(
-        "Permission Denied",
-        "Sorry, we need camera permissions to take a picture!"
-      );
-      return false;
-    }
-    return true;
-  };
+  const [facing, setFacing] = useState<CameraType>("back");
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView>(null);
+  const router = useRouter();
 
   // Request photo library permissions
   const requestPhotoLibraryPermission = async () => {
@@ -32,24 +26,29 @@ export default function Index() {
     return true;
   };
 
-  // Take a picture using the camera
+  // Capture picture from camera
   const takePicture = async () => {
-    const hasPermission = await requestCameraPermission();
-    if (!hasPermission) return;
+    if (!cameraRef.current) return;
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      aspect: [4, 3],
-      quality: 1,
-    });
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 1,
+        base64: false,
+      });
 
-    if (!result.canceled && result.assets[0]) {
-      setImage(result.assets[0].uri);
+      if (photo) {
+        // Navigate to result screen with the captured image
+        router.push({
+          pathname: "/result",
+          params: { imageUri: photo.uri },
+        });
+      }
+    } catch (error) {
+      Alert.alert("Error", "Failed to take picture");
     }
   };
 
-  // Pick an image from the photo library
+  // Pick image from photo library
   const pickImageFromLibrary = async () => {
     const hasPermission = await requestPhotoLibraryPermission();
     if (!hasPermission) return;
@@ -57,32 +56,116 @@ export default function Index() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: false,
-      aspect: [4, 3],
       quality: 1,
     });
 
     if (!result.canceled && result.assets[0]) {
-      setImage(result.assets[0].uri);
+      // Navigate to result screen with the selected image
+      router.push({
+        pathname: "/result",
+        params: { imageUri: result.assets[0].uri },
+      });
     }
   };
 
-  return (
-    <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-      {image && (
-        <Image
-          source={{ uri: image }}
-          style={{
-            width: screenWidth * 0.9,
-            height: screenHeight * 0.5,
-            marginBottom: 20,
-            borderRadius: 10,
-          }}
-        />
-      )}
-      <Button title="Take Picture" onPress={takePicture} />
-      <View style={{ marginTop: 10 }}>
-        <Button title="Upload Picture" onPress={pickImageFromLibrary} />
+  // Handle camera permission status
+  if (!permission) {
+    return <View style={styles.container} />;
+  }
+
+  if (!permission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Text>We need your permission to show the camera</Text>
+        <Button title="Grant Permission" onPress={requestPermission} />
       </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <CameraView
+        ref={cameraRef}
+        style={styles.camera}
+        facing={facing}
+      >
+        <View style={styles.controlsContainer}>
+          <TouchableOpacity
+            style={styles.uploadButton}
+            onPress={pickImageFromLibrary}
+            >
+              <Icon source="folder" size={24} color="white" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
+            <View style={styles.captureButtonInner} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.flipButton}
+            onPress={() => setFacing(facing === "back" ? "front" : "back")}
+          >
+            <Icon source="camera-flip" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
+      </CameraView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  camera: {
+    flex: 1,
+  },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+  },
+  controlsContainer: {
+    position: "absolute",
+    bottom: 50,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    paddingHorizontal: 40,
+  },
+  uploadButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  captureButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 4,
+    borderColor: "#fff",
+  },
+  captureButtonInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#fff",
+  },
+  flipButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  
+});
