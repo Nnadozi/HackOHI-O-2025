@@ -1,14 +1,17 @@
 import os
+import io
 from fastapi import FastAPI, UploadFile, File
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 import pandas as pd
 import numpy as np
+import numpy as np
 from PIL import Image
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
 df = pd.read_csv(r"final_data.csv").dropna()
-
 
 X=df.iloc[:,:3]
 y = df.iloc[:,3]
@@ -28,13 +31,45 @@ app.add_middleware(
 )
 
 
-@app.post("/uploadfile")
-async def upload_file(file: UploadFile = File(...)):
-    content = await file.read()
-    print(file.file)
-    pix = Image.open(file.file).load()
-    print(pix[25,60])
+# @app.post("/uploadfile")
+# async def upload_file(file: UploadFile = File(...)):
+#     content = await file.read()
+#     print(file.file)
+#     pix = Image.open(file.file).load()
+#     print(pix[25,60])
     # return {"filename": file.filename, "file_size": len(content), "file_mime_type": file.content_type}
+
+@app.post("/uploadfile")
+async def upload_file(fileUri):
+    file_path = fileUri
+
+    try:
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+
+        img = Image.open(io.BytesIO(file_bytes))
+        img = img.convert("RGB")
+
+        pixels = list(img.getData())
+
+        r = np.average(pixels[:][0])
+        g = np.average(pixels[:][1])
+        b = np.average(pixels[:][2])
+        # print('pixels: ' + pixels)
+
+        # r, g, b = img.getpixel((x, y))
+        data = pd.DataFrame([{"red": r, "green": g, "blue": b}])
+        prediction = model.predict(data)[0]
+
+        return JSONResponse({
+            "message": "color predicted successfully",
+            "prediction": prediction,
+        })
+    
+    except FileNotFoundError:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/color")
