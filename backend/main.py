@@ -1,6 +1,8 @@
 import os
 import sys
 import warnings
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import FloatTensorType
 
 # Configure environment BEFORE importing packages to prevent JavaScript loading
 os.environ['MPLBACKEND'] = 'Agg'  # Non-interactive matplotlib backend
@@ -27,6 +29,10 @@ y = df.iloc[:,3]
 model = DecisionTreeClassifier(max_depth=8,random_state=20251025)
 
 model.fit(X,y)
+
+onnx_model = convert_sklearn(model, initial_types=[('input', FloatTensorType([None, 3]))])
+with open("color_model.onnx", "wb") as f:
+    f.write(onnx_model.SerializeToString())
 
 app = FastAPI()
 

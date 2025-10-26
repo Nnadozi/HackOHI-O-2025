@@ -1,12 +1,18 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAudioPlayer } from "expo-audio";
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
+import { Camera, useCameraDevices, useFrameProcessor } from 'react-native-vision-camera';
+import { runOnJS } from 'react-native-reanimated';
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import * as Speech from "expo-speech";
 import React, { useEffect, useRef, useState } from "react";
+
+declare global {
+  var lastFrameTime: number | undefined;
+}
 import { Alert, Button, Dimensions, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { Icon } from "react-native-paper";
@@ -15,6 +21,18 @@ import LanguageSelector from "../components/LanguageSelector";
 import ObjectOutput from "../components/ObjectOutput";
 import { translateColor } from "../util/colorTranslator";
 import { getPromptForLanguage } from "../util/languagePrompts";
+import { InferenceSession, Tensor } from 'onnxruntime-react-native';
+import type { Frame } from "react-native-vision-camera";
+
+export type FrameType = Frame & {
+  width: number;
+  height: number;
+  data: Uint8Array; // raw pixel data (BGRA or YUV)
+};
+
+const session = await InferenceSession.create('color_model.onnx');
+const input = new Tensor('float32', Float32Array.from([r, g, b]), [1, 3]);
+const output = await session.run({ input });
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -49,6 +67,177 @@ export default function Index() {
     };
     loadLanguage();
   }, []);
+
+  const devices = useCameraDevices();
+  const device = devices.back;
+  const [hasPermission, setHasPermission] = useState(false);
+
+  useEffect(() => {
+    const request = async () => {
+      const status = await Camera.requestCameraPermission();
+      setHasPermission(status === 'authorized');
+    };
+    request();
+  }, []);
+
+  // Convert raw RGB array to base64 JPEG using a temporary PNG data URI
+async function rgbToBase64(rgbArray: Uint8Array, width: number, height: number) {
+  // Convert Uint8Array to data URL using simple Canvas workaround
+  // Each pixel: R G B
+  const pixels = [];
+  for (let i = 0; i < rgbArray.length; i += 3) {
+    const r = rgbArray[i];
+    const g = rgbArray[i + 1];
+    const b = rgbArray[i + 2];
+    pixels.push(r, g, b, 255); // add alpha
+  }
+  const rgbaArray = new Uint8ClampedArray(pixels);
+
+  // Create a temporary PNG using ImageManipulator
+  // First, create a 1x1 white image base64 (placeholder), then replace pixels
+  // Because ImageManipulator can't take raw RGBA directly, we'll skip direct raw manipulation
+  // Instead, we can encode RGB → base64 using `jpeg-js` in a Node environment,
+  // but in React Native, often you just write the RGB bytes to cache as a raw .rgb file
+  // For simplicity, here we just return a placeholder: you can still feed the model
+  // and optionally skip creating a URI if you only need model inference.
+  // If you need the URI, the standard approach is to take a captured photo from the camera
+  // or use the frame’s built-in toJPEG method if available.
+
+  // Example: returning the raw RGB as base64 directly (not a valid JPEG, but can be saved for debugging)
+  const binary = String.fromCharCode(...rgbArray);
+  return btoa(binary);
+}
+
+const sendFrame = async (frame: FrameType) => {
+  try {
+    const { width, height, data } = frame; // raw BGRA or YUV
+
+    // Convert to RGB array
+    const rgbArray = new Uint8Array(width * height * 3);
+    for (let i = 0; i < width * height; i++) {
+      const r = data[i * 4];     // BGRA: B G R A
+      const g = data[i * 4 + 1];
+      const b = data[i * 4 + 2];
+      rgbArray[i * 3] = r;
+      rgbArray[i * 3 + 1] = g;
+      rgbArray[i * 3 + 2] = b;
+    }
+
+    // Normalize and CHW for ONNX
+    const H = height;
+    const W = width;
+    const C = 3;
+    const floatData = new Float32Array(rgbArray.length);
+    for (let i = 0; i < rgbArray.length; i++) {
+      floatData[i] = rgbArray[i] / 255.0;
+    }
+
+    const chw = new Float32Array(C * H * W);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        for (let c = 0; c < C; c++) {
+          chw[c * H * W + y * W + x] = floatData[(y * W + x) * C + c];
+        }
+      }
+    }
+
+    const inputTensor = new Tensor("float32", chw, [1, 3, H, W]);
+    const output = await session.run({ input: inputTensor });
+    console.log("Model output:", output);
+
+    // Save to temporary file (for URI) if needed
+    const base64 = await rgbToBase64(rgbArray, width, height);
+    const uri = FileSystem.cacheDirectory + "frame.jpg";
+    await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+    analyzeImage(uri);
+
+    return { uri, rgbArray, output };
+  } catch (error) {
+    console.error("Error in sendFrame:", error);
+  }
+};
+
+  // Send frame (30 fps)
+  // const sendFrame = async (uri: string): Promise<void> => {
+  //   try {
+  //     // Read the image file as base64
+  //     const base64 = await FileSystem.readAsStringAsync(uri, {
+  //       encoding: FileSystem.EncodingType.Base64,
+  //     });
+
+  //     const image = await ImageManipulator.manipulateAsync(
+  //       `data:image/jpeg;base64,${base64}`,
+  //       [{ resize: { width: 224, height: 224 } }],
+  //       { base64: true, format: ImageManipulator.SaveFormat.JPEG }
+  //     );
+
+  //     const resizedBase64 = image.base64!;
+
+
+
+
+  //     // Send to your FastAPI backend
+  //     // await fetch("http://localhost:8000/uploadfile", {
+  //     //   method: "POST",
+  //     //   headers: { "Content-Type": "application/json" },
+  //     //   body: JSON.stringify({ file_uri: "data:image/jpeg;base64," + base64 }),
+  //     // });
+
+  //     analyzeImage(uri);
+
+  //     // Decode
+  //     const imageBytes = base64ToUint8Array(resizedBase64);
+
+  //     // Convert to Float32Array and normalize
+  //     const float32Data = new Float32Array(imageBytes.length);
+  //     for (let i = 0; i < imageBytes.length; i++) {
+  //       float32Data[i] = imageBytes[i] / 255.0; // normalize 0-1
+  //     }
+
+  //     const H = 224;
+  //     const W = 224;
+  //     const C = 3;
+  //     const chw = new Float32Array(C * H * W);
+
+  //     for (let y = 0; y < H; y++) {
+  //       for (let x = 0; x < W; x++) {
+  //         for (let c = 0; c < C; c++) {
+  //           chw[c * H * W + y * W + x] = float32Data[(y * W + x) * C + c];
+  //         }
+  //       }
+  //     }
+
+  //     const inputTensor = new Tensor('float32', chw, [1, 3, H, W]);
+
+  //     const output = await session.run({ input: inputTensor });
+
+  //     console.log('Model output:', output);
+  //   } catch (error) {
+  //     console.error("Error sending frame:", error);
+  //   }
+  // };
+
+  // Helper: convert base64 to UInt8Array
+  const base64ToUint8Array = (b64: string) => {
+    const binaryString = atob(b64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  };
+
+  // Frame processor (runs on every frame)
+  const frameProcessor = useFrameProcessor((frame) => {
+    const now = Date.now();
+    if (!global.lastFrameTime || now - global.lastFrameTime > 30000) {
+      global.lastFrameTime = now;
+      runOnJS(sendFrame)(frame);
+    }
+  }, []);
+
+  if (!device || !hasPermission) return <View style={{ flex: 1 }} />;
 
   // Save language preference when changed
   const handleLanguageSelect = async (language: string) => {
@@ -387,29 +576,29 @@ export default function Index() {
       }
 
       // Get color from backend
-      console.log("Finding color....");
-      const API_URL = "http://localhost:3000";
+      // console.log("Finding color....");
+      // const API_URL = "http://localhost:3000";
       
-      // Read the image file and convert to base64
-      const imageData = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: 'base64' as any,
-      });
+      // // Read the image file and convert to base64
+      // const imageData = await FileSystem.readAsStringAsync(imageUri, {
+      //   encoding: 'base64' as any,
+      // });
       
-      const colorResponse = await fetch(`${API_URL}/uploadfile`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ file_uri: imageData }),
-      });
+      // const colorResponse = await fetch(`${API_URL}/uploadfile`, {
+      //   method: "POST",
+      //   headers: {
+      //     "Content-Type": "application/json",
+      //   },
+      //   body: JSON.stringify({ file_uri: imageData }),
+      // });
 
-      if (!colorResponse.ok) {
-        console.error("Backend request failed:", colorResponse.status);
-        setColor("Error getting color from backend");
-        return;
-      }
+      // if (!colorResponse.ok) {
+      //   console.error("Backend request failed:", colorResponse.status);
+      //   setColor("Error getting color from backend");
+      //   return;
+      // }
 
-      const fetchedColor = await colorResponse.json();
+      // const fetchedColor = await colorResponse.json();
 
       if (fetchedColor && fetchedColor.prediction) {
         const rawColor = fetchedColor.prediction;
@@ -511,12 +700,13 @@ export default function Index() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <CameraView
-        ref={cameraRef}
-        style={styles.camera}
-        facing={facing}
-        onTouchEnd={handleCameraTap}
-      >
+      <Camera
+        style={{ flex: 1 }}
+        device={device}
+        isActive={true}
+        frameProcessor={frameProcessor}
+        frameProcessorFps={1} // reduce processing load
+      />
         {selectionVisible && !isCapturingRef.current && (
           <GestureDetector gesture={panGesture}>
             <Animated.View
@@ -616,7 +806,6 @@ export default function Index() {
           onSelect={handleLanguageSelect}
           selectedLanguage={selectedLanguage}
         />
-      </CameraView>
     </GestureHandlerRootView>
   );
 }
