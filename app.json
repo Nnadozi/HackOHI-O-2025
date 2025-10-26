@@ -57,6 +57,12 @@
         {
           "photosPermission": "Allow Inchroma to access your photos"
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Inchroma to access your microphone."
+        }
       ]
     ],
     "experiments": {

@@ -1,12 +1,20 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAudioPlayer } from "expo-audio";
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import React, { useRef, useState } from "react";
+import * as Speech from "expo-speech";
+import React, { useEffect, useRef, useState } from "react";
 import { Alert, Button, Dimensions, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { Icon } from "react-native-paper";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import LanguageSelector from "../components/LanguageSelector";
+import ObjectOutput from "../components/ObjectOutput";
+import { translateColor } from "../util/colorTranslator";
+import { getPromptForLanguage } from "../util/languagePrompts";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -23,6 +31,62 @@ export default function Index() {
   const router = useRouter();
   const [selectionVisible, setSelectionVisible] = useState(false);
   const isCapturingRef = useRef(false);
+  const [objectLabel, setObjectLabel] = useState("");
+  const [color, setColor] = useState("");
+  const [translatedColor, setTranslatedColor] = useState("");
+  const [showOutput, setShowOutput] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState("en-US");
+  const [languageSelectorVisible, setLanguageSelectorVisible] = useState(false);
+
+  // Load language preference on mount
+  useEffect(() => {
+    const loadLanguage = async () => {
+      const savedLanguage = await AsyncStorage.getItem("selectedLanguage");
+      if (savedLanguage) {
+        setSelectedLanguage(savedLanguage);
+      }
+    };
+    loadLanguage();
+  }, []);
+
+  // Save language preference when changed
+  const handleLanguageSelect = async (language: string) => {
+    setSelectedLanguage(language);
+    await AsyncStorage.setItem("selectedLanguage", language);
+  };
+
+  // Re-translate color when language changes
+  useEffect(() => {
+    if (color) {
+      const translated = translateColor(color, selectedLanguage);
+      setTranslatedColor(translated);
+    }
+  }, [selectedLanguage, color]);
+
+  // Create audio player
+  const player = useAudioPlayer(
+    require("../assets/sound/ES_Mobile Phone, Notification Tone 02 - Epidemic Sound.mp3")
+  );
+
+  // Play sound and speak when output is shown
+  useEffect(() => {
+    if (showOutput && !isLoading && player && objectLabel && color) {
+      // Seek to beginning and play the sound effect
+      player.seekTo(0);
+      player.play();
+      
+      // Speak the color and object (e.g., "Gray table")
+      setTimeout(() => {
+        const textToSpeak = translatedColor ? `${translatedColor} ${objectLabel}` : `${color} ${objectLabel}`;
+        Speech.speak(textToSpeak, {
+          language: selectedLanguage,
+          pitch: 1.0,
+          rate: 1.0,
+        });
+      }, 500); // Wait 500ms after sound starts playing
+    }
+  }, [showOutput, isLoading, player, objectLabel, color, translatedColor, selectedLanguage]);
 
   // Animated state for draggable, resizable selection box
   const translateX = useSharedValue(SCREEN_WIDTH / 2 - INITIAL_SELECTION_SIZE / 2);
@@ -43,9 +107,22 @@ export default function Index() {
     return true;
   };
 
+  // Reset output and selection
+  const resetOutput = () => {
+    setObjectLabel("");
+    setColor("");
+    setTranslatedColor("");
+    setShowOutput(false);
+  };
+
   // Handle camera tap to show/hide selection
   function handleCameraTap(event: any) {
     if (isCapturingRef.current) return;
+    
+    // Reset output when tapping to move selection
+    if (showOutput) {
+      resetOutput();
+    }
 
     const { locationX, locationY } = event.nativeEvent;
     const halfW = selectionWidth.value / 2;
@@ -230,6 +307,129 @@ export default function Index() {
     return result.uri;
   }
 
+  // Helper function to convert blob to base64
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64String = reader.result as string;
+        // Remove the data URL prefix
+        const base64 = base64String.split(",")[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  // Analyze image and get object label and color
+  const analyzeImage = async (imageUri: string) => {
+    try {
+      setIsLoading(true);
+      setObjectLabel("");
+      setColor("");
+      setShowOutput(false);
+
+      // Get object label from OpenAI
+      const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+      
+      if (!apiKey) {
+        console.error("OpenAI API key not found in environment variables");
+        setObjectLabel("API key not configured");
+        return;
+      }
+
+      // Read the image file and convert to base64
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+      const base64Image = await blobToBase64(blob);
+
+      // Get language-specific prompt
+      const prompt = getPromptForLanguage(selectedLanguage);
+
+      // Call OpenAI GPT-4 Vision API
+      const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: prompt,
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/jpeg;base64,${base64Image}`,
+                    detail: "low",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      const data = await openaiResponse.json();
+      
+      if (data.choices && data.choices[0] && data.choices[0].message) {
+        const label = data.choices[0].message.content.trim();
+        setObjectLabel(label);
+      } else {
+        setObjectLabel("Unable to identify");
+      }
+
+      // Get color from backend
+      console.log("Finding color....");
+      const API_URL = "http://localhost:3000";
+      
+      // Read the image file and convert to base64
+      const imageData = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: 'base64' as any,
+      });
+      
+      const colorResponse = await fetch(`${API_URL}/uploadfile`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ file_uri: imageData }),
+      });
+
+      if (!colorResponse.ok) {
+        console.error("Backend request failed:", colorResponse.status);
+        setColor("Error getting color from backend");
+        return;
+      }
+
+      const fetchedColor = await colorResponse.json();
+
+      if (fetchedColor && fetchedColor.prediction) {
+        const rawColor = fetchedColor.prediction;
+        const translated = translateColor(rawColor, selectedLanguage);
+        setColor(rawColor);
+        setTranslatedColor(translated);
+      } else {
+        setColor("Unable to identify color");
+        setTranslatedColor("Unable to identify color");
+      }
+
+      setShowOutput(true);
+    } catch (error) {
+      console.error("Error analyzing image:", error);
+      setObjectLabel("Error analyzing image");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Capture picture from camera
   const takePicture = async () => {
     if (!cameraRef.current) return;
@@ -265,22 +465,8 @@ export default function Index() {
         const cropW = Math.min(photo.width - originX, Math.round(w * scaleX));
         const cropH = Math.min(photo.height - originY, Math.round(h * scaleY));
 
-        // Navigate to result screen with both original and cropped images, plus coordinates
-        router.push({
-          pathname: "/result",
-          params: {
-            imageUri: croppedUri,
-            originalImageUri: photo.uri,
-            originalWidth: photo.width.toString(),
-            originalHeight: photo.height.toString(),
-            cropX: originX.toString(),
-            cropY: originY.toString(),
-            cropWidth: cropW.toString(),
-            cropHeight: cropH.toString(),
-            selectionWidth: Math.round(w).toString(),
-            selectionHeight: Math.round(h).toString(),
-          },
-        });
+        // Analyze the cropped image
+        await analyzeImage(croppedUri);
       }
     } catch (error) {
       Alert.alert("Error", "Failed to take picture");
@@ -304,22 +490,8 @@ export default function Index() {
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
       
-      // Navigate to result screen with the edited/cropped image
-      router.push({
-        pathname: "/result",
-        params: {
-          imageUri: asset.uri,
-          originalImageUri: asset.uri,
-          originalWidth: asset.width?.toString() || "0",
-          originalHeight: asset.height?.toString() || "0",
-          cropX: "0",
-          cropY: "0", 
-          cropWidth: "0",
-          cropHeight: "0",
-          selectionWidth: "0",
-          selectionHeight: "0",
-        },
-      });
+      // Analyze the image
+      await analyzeImage(asset.uri);
     }
   };
 
@@ -412,6 +584,38 @@ export default function Index() {
             </TouchableOpacity>
           </View>
         </View>
+
+        <TouchableOpacity
+          style={styles.languageButton}
+          onPress={() => setLanguageSelectorVisible(true)}
+        >
+          <Text style={styles.languageFlag}>
+            {selectedLanguage.includes("en") ? "🇺🇸" :
+             selectedLanguage.includes("es") ? "🇪🇸" :
+             selectedLanguage.includes("fr") ? "🇫🇷" :
+             selectedLanguage.includes("de") ? "🇩🇪" :
+             selectedLanguage.includes("it") ? "🇮🇹" :
+             selectedLanguage.includes("pt") ? "🇧🇷" :
+             selectedLanguage.includes("ja") ? "🇯🇵" :
+             selectedLanguage.includes("zh") ? "🇨🇳" : "🌐"}
+          </Text>
+        </TouchableOpacity>
+
+        <ObjectOutput 
+          objectLabel={objectLabel} 
+          color={translatedColor || color}
+          originalColor={color}
+          visible={showOutput || isLoading}
+          isLoading={isLoading}
+          onDismiss={resetOutput}
+        />
+
+        <LanguageSelector
+          visible={languageSelectorVisible}
+          onClose={() => setLanguageSelectorVisible(false)}
+          onSelect={handleLanguageSelect}
+          selectedLanguage={selectedLanguage}
+        />
       </CameraView>
     </GestureHandlerRootView>
   );
@@ -431,7 +635,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(0, 0, 0, 0.3)",
     borderRadius: 16,
-    paddingVertical: 8,
+    paddingVertical: 16,
     width: "60%",
     alignSelf: "center",
   },
@@ -503,5 +707,22 @@ const styles = StyleSheet.create({
   mask: {
     position: "absolute",
     zIndex: 1,
+  },
+  languageButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "rgba(255, 255, 255, 0.3)",
+    zIndex: 10,
+  },
+  languageFlag: {
+    fontSize: 28,
   },
 });

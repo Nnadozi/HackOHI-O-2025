@@ -8,7 +8,6 @@ export default function RootLayout() {
     <PaperProvider>
       <Stack screenOptions={{ headerShown: false, gestureEnabled: false }}>
         <Stack.Screen name="index"  />
-        <Stack.Screen name="result"  />
       </Stack>
     </PaperProvider>
     </GestureHandlerRootView>
