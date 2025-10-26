@@ -31,8 +31,8 @@ export type FrameType = Frame & {
 };
 
 const session = await InferenceSession.create('color_model.onnx');
-const input = new Tensor('float32', Float32Array.from([r, g, b]), [1, 3]);
-const output = await session.run({ input });
+// const input = new Tensor('float32', Float32Array.from([r, g, b]), [1, 3]);
+// const output = await session.run({ input });
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -109,6 +109,7 @@ async function rgbToBase64(rgbArray: Uint8Array, width: number, height: number) 
 }
 
 const sendFrame = async (frame: FrameType) => {
+  console.log("sendFrame called with frame:", frame.width, frame.height);
   try {
     const { width, height, data } = frame; // raw BGRA or YUV
 
