@@ -24,6 +24,20 @@ const MIN_SIZE = 60;
 const HANDLE_SIZE = 16;
 const HANDLE_HIT = 36;
 
+// Detection types
+interface Detection {
+  label: string;
+  confidence: number;
+  bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+type CameraMode = "manual" | "auto";
+
 export default function Index() {
   const [facing, setFacing] = useState<CameraType>("back");
   const [permission, requestPermission] = useCameraPermissions();
@@ -93,6 +107,82 @@ export default function Index() {
   const translateY = useSharedValue(SCREEN_HEIGHT / 2 - INITIAL_SELECTION_SIZE / 2);
   const selectionWidth = useSharedValue(INITIAL_SELECTION_SIZE);
   const selectionHeight = useSharedValue(INITIAL_SELECTION_SIZE);
+
+  // NEW: Start/stop object detection when mode changes
+  useEffect(() => {
+    if (cameraMode === "auto") {
+      startObjectDetection();
+    } else {
+      stopObjectDetection();
+    }
+
+    return () => {
+      stopObjectDetection();
+    };
+  }, [cameraMode]);
+
+  // NEW: Object detection function
+  const detectObjects = async () => {
+    if (!cameraRef.current || isCapturingRef.current) return;
+
+    try {
+      // Take a snapshot for processing
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.3, // Lower quality for speed
+        base64: true,
+        skipProcessing: true,
+      });
+
+      if (!photo) return;
+
+      // Send to your backend API
+      const formData = new FormData();
+      formData.append('image', {
+        uri: photo.uri,
+        type: 'image/jpeg',
+        name: 'frame.jpg',
+      } as any);
+
+      const response = await fetch('YOUR_BACKEND_URL/detect-objects', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setDetections(data.detections || []);
+      }
+    } catch (error) {
+      console.error('Detection error:', error);
+    }
+  };
+
+  // NEW: Start continuous detection
+  const startObjectDetection = () => {
+    if (detectionIntervalRef.current) return;
+    
+    // Run detection every 500ms for real-time feel without overwhelming the API
+    detectionIntervalRef.current = setInterval(() => {
+      detectObjects();
+    }, 500);
+  };
+
+  // NEW: Stop detection
+  const stopObjectDetection = () => {
+    if (detectionIntervalRef.current) {
+      clearInterval(detectionIntervalRef.current);
+      detectionIntervalRef.current = null;
+    }
+    setDetections([]);
+  };
+
+  // NEW: Toggle between manual and auto mode
+  const toggleCameraMode = () => {
+    setCameraMode(prev => prev === "manual" ? "auto" : "manual");
+    if (cameraMode === "manual") {
+      setSelectionVisible(false);
+    }
+  };
 
   // Request photo library permissions
   const requestPhotoLibraryPermission = async () => {
@@ -517,7 +607,8 @@ export default function Index() {
         facing={facing}
         onTouchEnd={handleCameraTap}
       >
-        {selectionVisible && !isCapturingRef.current && (
+        {/* Manual mode: Selection box */}
+        {cameraMode === "manual" && selectionVisible && !isCapturingRef.current && (
           <GestureDetector gesture={panGesture}>
             <Animated.View
               onStartShouldSetResponder={() => true}
@@ -532,7 +623,7 @@ export default function Index() {
             />
           </GestureDetector>
         )}
-        {selectionVisible && !isCapturingRef.current && (
+        {cameraMode === "manual" && selectionVisible && !isCapturingRef.current && (
           <>
             <GestureDetector gesture={topLeftGesture}>
               <Animated.View style={[styles.handle, handleTLStyle]}>
@@ -556,7 +647,7 @@ export default function Index() {
             </GestureDetector>
           </>
         )}
-        {selectionVisible && !isCapturingRef.current && (
+        {cameraMode === "manual" && selectionVisible && !isCapturingRef.current && (
           <>
             <Animated.View pointerEvents="none" style={[styles.mask, maskTopStyle]} />
             <Animated.View pointerEvents="none" style={[styles.mask, maskBottomStyle]} />
@@ -564,6 +655,43 @@ export default function Index() {
             <Animated.View pointerEvents="none" style={[styles.mask, maskRightStyle]} />
           </>
         )}
+
+        {/* Auto mode: Detection boxes */}
+        {cameraMode === "auto" && detections.map((detection, index) => (
+          <View
+            key={`detection-${index}`}
+            style={[
+              styles.detectionBox,
+              {
+                left: detection.bbox.x * SCREEN_WIDTH,
+                top: detection.bbox.y * SCREEN_HEIGHT,
+                width: detection.bbox.width * SCREEN_WIDTH,
+                height: detection.bbox.height * SCREEN_HEIGHT,
+              },
+            ]}
+          >
+            <View style={styles.detectionLabel}>
+              <Text style={styles.detectionText}>
+                {detection.label} {Math.round(detection.confidence * 100)}%
+              </Text>
+            </View>
+          </View>
+        ))}
+
+        {/* Mode toggle button */}
+        <TouchableOpacity
+          style={styles.modeToggle}
+          onPress={toggleCameraMode}
+        >
+          <Icon 
+            source={cameraMode === "manual" ? "target" : "hand-back-right"} 
+            size={24} 
+            color="white" 
+          />
+          <Text style={styles.modeText}>
+            {cameraMode === "manual" ? "Auto" : "Manual"}
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.controlsBackground}>
           <View style={styles.controlsContainer}>
@@ -573,8 +701,15 @@ export default function Index() {
             >
               <Icon source="folder" size={24} color="white" />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
-              <View style={styles.captureButtonInner} />
+            <TouchableOpacity 
+              style={styles.captureButton} 
+              onPress={takePicture}
+              disabled={cameraMode === "auto"}
+            >
+              <View style={[
+                styles.captureButtonInner,
+                cameraMode === "auto" && styles.captureButtonDisabled
+              ]} />
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.flipButton}
@@ -669,6 +804,9 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     backgroundColor: "white",
+  },
+  captureButtonDisabled: {
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
   },
   flipButton: {
     width: 40,
