@@ -32,14 +32,37 @@ Now, set up the Python environment and install the necessary libraries for the b
   You should see `(.venv)` at the beginning of your terminal prompt when the environment is active.
 
 4.  **Install Python Dependencies:**
-  With the virtual environment activated, install the required packages using pip.
+  With the virtual environment activated, install the required packages using the requirements.txt file:
 
   ```bash
-  pip install pandas matplotlib seaborn scikit-learn fastapi python-dotenv "fastapi[standard]"
+  pip install -r requirements.txt
   ```
+  
+  Note: If you see JavaScript-related errors, these are from packages trying to load browser/Jupyter components. 
+  These can be safely ignored as they don't affect the FastAPI backend functionality.
 
 5. **Run the backend:**
-  With the environment being run,  use the following command
+  
+  **Option 1: Use the automated startup script (Recommended)**
   ```bash
+  ./start_backend.sh
+  ```
+  This script automatically handles environment setup and prevents JavaScript errors.
+  
+  **Option 2: Use the Python startup script**
+  ```bash
+  python run_backend.py
+  ```
+  
+  **Option 3: Manual FastAPI startup**
+  ```bash
+  # Set environment variables first to prevent JavaScript errors
+  export MPLBACKEND=Agg
+  export JUPYTER_PLATFORM_DIRS=0
+  
+  # Then run FastAPI
   fastapi dev main.py
   ```
+  
+  The backend will be available at http://localhost:8000
+  API documentation at http://localhost:8000/docs

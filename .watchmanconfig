@@ -1,0 +1,8 @@
+{
+  "ignore_dirs": [
+    "app/backend/.venv",
+    ".venv",
+    "__pycache__",
+    "app/backend/__pycache__"
+  ]
+}

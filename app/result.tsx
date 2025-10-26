@@ -1,3 +1,4 @@
+import * as FileSystem from "expo-file-system/legacy";
 import { Stack, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
@@ -99,18 +100,34 @@ export default function ResultScreen() {
         setObjectLabel("Unable to identify");
       }
 
-      const colorResponse = await fetch("http://localhost:8000/uploadfile", {
+      console.log("Finding color....")
+      // Using Node.js bridge server on port 3000
+      // With ADB port forwarding, use localhost for USB-connected Android devices
+      const API_URL = "http://localhost:3000";
+      
+      // Read the image file and convert to base64
+      const imageData = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: 'base64' as any,
+      });
+      
+      const colorResponse = await fetch(`${API_URL}/uploadfile`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ file_uri: imageUri }),
+        body: JSON.stringify({ file_uri: imageData }),
       });
+
+      if (!colorResponse.ok) {
+        console.error("Backend request failed:", colorResponse.status);
+        setColor("Error getting color from backend");
+        return;
+      }
 
       const fetchedColor = await colorResponse.json();
 
-      if (fetchedColor) {
-        setColor(fetchedColor);
+      if (fetchedColor && fetchedColor.prediction) {
+        setColor(fetchedColor.prediction);
       } else {
         setColor("Unable to identify color");
       }

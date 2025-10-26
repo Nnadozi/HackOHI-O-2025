@@ -44,4 +44,8 @@ app-example
 
 # Backend
 .venv/
+app/backend/.venv/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd

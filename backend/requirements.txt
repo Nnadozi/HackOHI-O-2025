@@ -1,0 +1,16 @@
+# Core dependencies for the color prediction API
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# Data processing and ML
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+Pillow==10.4.0
+
+# For CORS support
+python-dotenv==1.0.1
+
+# Optional: For image processing scripts
+# opencv-python==4.10.0.84
