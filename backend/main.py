@@ -46,14 +46,6 @@ app.add_middleware(
 )
 
 
-# @app.post("/uploadfile")
-# async def upload_file(file: UploadFile = File(...)):
-#     content = await file.read()
-#     print(file.file)
-#     pix = Image.open(file.file).load()
-#     print(pix[25,60])
-    # return {"filename": file.filename, "file_size": len(content), "file_mime_type": file.content_type}
-
 @app.post("/uploadfile")
 async def upload_file(data: FileURI): 
     print("python!")
