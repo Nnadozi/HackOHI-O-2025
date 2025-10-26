@@ -6,7 +6,7 @@
 ⏺ Bash(cd /Users/chikaosolunnadozie/Desktop/apps/HackOHI-O-2025/bridge && node server.js) timeout: 5m 0s
   ⎿  Running in the background (down arrow to manage)
 
-⏺ Bash(adb reverse tcp:3000 tcd cp:3000 && adb reverse tcp:8000 tcp:8000)
+⏺ Bash adb reverse tcp:3000 tcp:3000 && adb reverse tcp:8000 tcp:8000
   ⎿  3000
      8000
 
