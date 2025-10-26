@@ -1,20 +1,13 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useAudioPlayer } from "expo-audio";
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
-import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import * as Speech from "expo-speech";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { Alert, Button, Dimensions, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { Icon } from "react-native-paper";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
-import LanguageSelector from "../components/LanguageSelector";
-import ObjectOutput from "../components/ObjectOutput";
-import { translateColor } from "../util/colorTranslator";
-import { getPromptForLanguage } from "../util/languagePrompts";
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, runOnJS } from "react-native-reanimated";
+import * as FileSystem from 'expo-file-system';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -45,62 +38,12 @@ export default function Index() {
   const router = useRouter();
   const [selectionVisible, setSelectionVisible] = useState(false);
   const isCapturingRef = useRef(false);
-  const [objectLabel, setObjectLabel] = useState("");
-  const [color, setColor] = useState("");
-  const [translatedColor, setTranslatedColor] = useState("");
-  const [showOutput, setShowOutput] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState("en-US");
-  const [languageSelectorVisible, setLanguageSelectorVisible] = useState(false);
 
-  // Load language preference on mount
-  useEffect(() => {
-    const loadLanguage = async () => {
-      const savedLanguage = await AsyncStorage.getItem("selectedLanguage");
-      if (savedLanguage) {
-        setSelectedLanguage(savedLanguage);
-      }
-    };
-    loadLanguage();
-  }, []);
-
-  // Save language preference when changed
-  const handleLanguageSelect = async (language: string) => {
-    setSelectedLanguage(language);
-    await AsyncStorage.setItem("selectedLanguage", language);
-  };
-
-  // Re-translate color when language changes
-  useEffect(() => {
-    if (color) {
-      const translated = translateColor(color, selectedLanguage);
-      setTranslatedColor(translated);
-    }
-  }, [selectedLanguage, color]);
-
-  // Create audio player
-  const player = useAudioPlayer(
-    require("../assets/sound/ES_Mobile Phone, Notification Tone 02 - Epidemic Sound.mp3")
-  );
-
-  // Play sound and speak when output is shown
-  useEffect(() => {
-    if (showOutput && !isLoading && player && objectLabel && color) {
-      // Seek to beginning and play the sound effect
-      player.seekTo(0);
-      player.play();
-      
-      // Speak the color and object (e.g., "Gray table")
-      setTimeout(() => {
-        const textToSpeak = translatedColor ? `${translatedColor} ${objectLabel}` : `${color} ${objectLabel}`;
-        Speech.speak(textToSpeak, {
-          language: selectedLanguage,
-          pitch: 1.0,
-          rate: 1.0,
-        });
-      }, 500); // Wait 500ms after sound starts playing
-    }
-  }, [showOutput, isLoading, player, objectLabel, color, translatedColor, selectedLanguage]);
+  // Object detection state
+  const [cameraMode, setCameraMode] = useState<CameraMode>("manual");
+  const [detections, setDetections] = useState<Detection[]>([]);
+  const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingRef = useRef(false);
 
   // Animated state for draggable, resizable selection box
   const translateX = useSharedValue(SCREEN_WIDTH / 2 - INITIAL_SELECTION_SIZE / 2);
@@ -108,7 +51,7 @@ export default function Index() {
   const selectionWidth = useSharedValue(INITIAL_SELECTION_SIZE);
   const selectionHeight = useSharedValue(INITIAL_SELECTION_SIZE);
 
-  // NEW: Start/stop object detection when mode changes
+  // Start/stop object detection when mode changes
   useEffect(() => {
     if (cameraMode === "auto") {
       startObjectDetection();
@@ -121,31 +64,59 @@ export default function Index() {
     };
   }, [cameraMode]);
 
-  // NEW: Object detection function
-  const detectObjects = async () => {
-    if (!cameraRef.current || isCapturingRef.current) return;
+  // Capture frame as base64 without saving
+  const captureFrameForDetection = async () => {
+    if (!cameraRef.current || isProcessingRef.current) return null;
 
     try {
-      // Take a snapshot for processing
+      isProcessingRef.current = true;
+
+      // Use a temporary file that we'll delete immediately
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.3, // Lower quality for speed
-        base64: true,
-        skipProcessing: true,
+        quality: 0.3,
+        base64: false,
+        exif: false,
       });
 
-      if (!photo) return;
+      if (!photo) {
+        isProcessingRef.current = false;
+        return null;
+      }
 
-      // Send to your backend API
-      const formData = new FormData();
-      formData.append('image', {
-        uri: photo.uri,
-        type: 'image/jpeg',
-        name: 'frame.jpg',
-      } as any);
+      // Read as base64
+      const base64 = await FileSystem.readAsStringAsync(photo.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
 
+      // Delete the temporary file immediately
+      await FileSystem.deleteAsync(photo.uri, { idempotent: true });
+
+      isProcessingRef.current = false;
+      return base64;
+    } catch (error) {
+      console.error('Frame capture error:', error);
+      isProcessingRef.current = false;
+      return null;
+    }
+  };
+
+  // Object detection function
+  const detectObjects = async () => {
+    if (isProcessingRef.current) return;
+
+    try {
+      const base64Image = await captureFrameForDetection();
+      if (!base64Image) return;
+
+      // Send to backend API
       const response = await fetch('YOUR_BACKEND_URL/detect-objects', {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: base64Image,
+        }),
       });
 
       if (response.ok) {
@@ -157,26 +128,27 @@ export default function Index() {
     }
   };
 
-  // NEW: Start continuous detection
+  // Start continuous detection
   const startObjectDetection = () => {
     if (detectionIntervalRef.current) return;
     
-    // Run detection every 500ms for real-time feel without overwhelming the API
+    // Run detection every 800ms for good balance
     detectionIntervalRef.current = setInterval(() => {
       detectObjects();
-    }, 500);
+    }, 800);
   };
 
-  // NEW: Stop detection
+  // Stop detection
   const stopObjectDetection = () => {
     if (detectionIntervalRef.current) {
       clearInterval(detectionIntervalRef.current);
       detectionIntervalRef.current = null;
     }
     setDetections([]);
+    isProcessingRef.current = false;
   };
 
-  // NEW: Toggle between manual and auto mode
+  // Toggle between manual and auto mode
   const toggleCameraMode = () => {
     setCameraMode(prev => prev === "manual" ? "auto" : "manual");
     if (cameraMode === "manual") {
@@ -197,22 +169,9 @@ export default function Index() {
     return true;
   };
 
-  // Reset output and selection
-  const resetOutput = () => {
-    setObjectLabel("");
-    setColor("");
-    setTranslatedColor("");
-    setShowOutput(false);
-  };
-
-  // Handle camera tap to show/hide selection
+  // Handle camera tap to show/hide selection (only in manual mode)
   function handleCameraTap(event: any) {
-    if (isCapturingRef.current) return;
-    
-    // Reset output when tapping to move selection
-    if (showOutput) {
-      resetOutput();
-    }
+    if (isCapturingRef.current || cameraMode === "auto") return;
 
     const { locationX, locationY } = event.nativeEvent;
     const halfW = selectionWidth.value / 2;
@@ -234,7 +193,7 @@ export default function Index() {
     translateY.value = Math.min(Math.max(0, nextY), Math.max(0, maxY));
   });
 
-  // Translation-only transform: keep position math stable (size handled separately)
+  // Translation-only transform
   const animatedTransformStyle = useAnimatedStyle(() => {
     return {
       transform: [
@@ -244,7 +203,7 @@ export default function Index() {
     };
   });
 
-  // Animated size to reflect width/height without affecting translation
+  // Animated size
   const animatedSizeStyle = useAnimatedStyle(() => {
     return {
       width: selectionWidth.value,
@@ -252,7 +211,6 @@ export default function Index() {
     };
   });
 
-  // Static styles for the selection box
   const selectionStaticStyle = { borderColor: '#FFFFFF', backgroundColor: 'rgba(255,255,255,0.18)' } as const;
 
   // Corner handle gestures
@@ -397,132 +355,9 @@ export default function Index() {
     return result.uri;
   }
 
-  // Helper function to convert blob to base64
-  const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        // Remove the data URL prefix
-        const base64 = base64String.split(",")[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  };
-
-  // Analyze image and get object label and color
-  const analyzeImage = async (imageUri: string) => {
-    try {
-      setIsLoading(true);
-      setObjectLabel("");
-      setColor("");
-      setShowOutput(false);
-
-      // Get object label from OpenAI
-      const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-      
-      if (!apiKey) {
-        console.error("OpenAI API key not found in environment variables");
-        setObjectLabel("API key not configured");
-        return;
-      }
-
-      // Read the image file and convert to base64
-      const response = await fetch(imageUri);
-      const blob = await response.blob();
-      const base64Image = await blobToBase64(blob);
-
-      // Get language-specific prompt
-      const prompt = getPromptForLanguage(selectedLanguage);
-
-      // Call OpenAI GPT-4 Vision API
-      const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: prompt,
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${base64Image}`,
-                    detail: "low",
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-      });
-
-      const data = await openaiResponse.json();
-      
-      if (data.choices && data.choices[0] && data.choices[0].message) {
-        const label = data.choices[0].message.content.trim();
-        setObjectLabel(label);
-      } else {
-        setObjectLabel("Unable to identify");
-      }
-
-      // Get color from backend
-      console.log("Finding color....");
-      const API_URL = "http://localhost:3000";
-      
-      // Read the image file and convert to base64
-      const imageData = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: 'base64' as any,
-      });
-      
-      const colorResponse = await fetch(`${API_URL}/uploadfile`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ file_uri: imageData }),
-      });
-
-      if (!colorResponse.ok) {
-        console.error("Backend request failed:", colorResponse.status);
-        setColor("Error getting color from backend");
-        return;
-      }
-
-      const fetchedColor = await colorResponse.json();
-
-      if (fetchedColor && fetchedColor.prediction) {
-        const rawColor = fetchedColor.prediction;
-        const translated = translateColor(rawColor, selectedLanguage);
-        setColor(rawColor);
-        setTranslatedColor(translated);
-      } else {
-        setColor("Unable to identify color");
-        setTranslatedColor("Unable to identify color");
-      }
-
-      setShowOutput(true);
-    } catch (error) {
-      console.error("Error analyzing image:", error);
-      setObjectLabel("Error analyzing image");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Capture picture from camera
+  // Capture picture from camera (only in manual mode)
   const takePicture = async () => {
-    if (!cameraRef.current) return;
+    if (!cameraRef.current || cameraMode === "auto") return;
 
     try {
       isCapturingRef.current = true;
@@ -547,7 +382,6 @@ export default function Index() {
           h
         );
 
-        // Calculate crop coordinates for the original image
         const scaleX = photo.width / SCREEN_WIDTH;
         const scaleY = photo.height / SCREEN_HEIGHT;
         const originX = Math.max(0, Math.round(x * scaleX));
@@ -555,8 +389,21 @@ export default function Index() {
         const cropW = Math.min(photo.width - originX, Math.round(w * scaleX));
         const cropH = Math.min(photo.height - originY, Math.round(h * scaleY));
 
-        // Analyze the cropped image
-        await analyzeImage(croppedUri);
+        router.push({
+          pathname: "/result",
+          params: {
+            imageUri: croppedUri,
+            originalImageUri: photo.uri,
+            originalWidth: photo.width.toString(),
+            originalHeight: photo.height.toString(),
+            cropX: originX.toString(),
+            cropY: originY.toString(),
+            cropWidth: cropW.toString(),
+            cropHeight: cropH.toString(),
+            selectionWidth: Math.round(w).toString(),
+            selectionHeight: Math.round(h).toString(),
+          },
+        });
       }
     } catch (error) {
       Alert.alert("Error", "Failed to take picture");
@@ -565,7 +412,7 @@ export default function Index() {
     }
   };
 
-  // Pick image from photo library with native editing
+  // Pick image from photo library
   const pickImageFromLibrary = async () => {
     const hasPermission = await requestPhotoLibraryPermission();
     if (!hasPermission) return;
@@ -573,19 +420,31 @@ export default function Index() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,
-      aspect: [4,4], // Square crop
+      aspect: [4,4],
       quality: 0.8,
     });
 
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
       
-      // Analyze the image
-      await analyzeImage(asset.uri);
+      router.push({
+        pathname: "/result",
+        params: {
+          imageUri: asset.uri,
+          originalImageUri: asset.uri,
+          originalWidth: asset.width?.toString() || "0",
+          originalHeight: asset.height?.toString() || "0",
+          cropX: "0",
+          cropY: "0", 
+          cropWidth: "0",
+          cropHeight: "0",
+          selectionWidth: "0",
+          selectionHeight: "0",
+        },
+      });
     }
   };
 
-  // Handle camera permission status
   if (!permission) {
     return <View style={styles.container} />;
   }
@@ -684,12 +543,12 @@ export default function Index() {
           onPress={toggleCameraMode}
         >
           <Icon 
-            source={cameraMode === "manual" ? "target" : "hand-back-right"} 
+            source={cameraMode === "manual" ? "eye-outline" : "hand-back-right"} 
             size={24} 
             color="white" 
           />
           <Text style={styles.modeText}>
-            {cameraMode === "manual" ? "Auto" : "Manual"}
+            {cameraMode === "manual" ? "Auto Detect" : "Manual"}
           </Text>
         </TouchableOpacity>
 
@@ -702,13 +561,16 @@ export default function Index() {
               <Icon source="folder" size={24} color="white" />
             </TouchableOpacity>
             <TouchableOpacity 
-              style={styles.captureButton} 
+              style={[
+                styles.captureButton,
+                cameraMode === "auto" && styles.captureButtonDisabled
+              ]} 
               onPress={takePicture}
               disabled={cameraMode === "auto"}
             >
               <View style={[
                 styles.captureButtonInner,
-                cameraMode === "auto" && styles.captureButtonDisabled
+                cameraMode === "auto" && styles.captureButtonInnerDisabled
               ]} />
             </TouchableOpacity>
             <TouchableOpacity
@@ -719,38 +581,6 @@ export default function Index() {
             </TouchableOpacity>
           </View>
         </View>
-
-        <TouchableOpacity
-          style={styles.languageButton}
-          onPress={() => setLanguageSelectorVisible(true)}
-        >
-          <Text style={styles.languageFlag}>
-            {selectedLanguage.includes("en") ? "🇺🇸" :
-             selectedLanguage.includes("es") ? "🇪🇸" :
-             selectedLanguage.includes("fr") ? "🇫🇷" :
-             selectedLanguage.includes("de") ? "🇩🇪" :
-             selectedLanguage.includes("it") ? "🇮🇹" :
-             selectedLanguage.includes("pt") ? "🇧🇷" :
-             selectedLanguage.includes("ja") ? "🇯🇵" :
-             selectedLanguage.includes("zh") ? "🇨🇳" : "🌐"}
-          </Text>
-        </TouchableOpacity>
-
-        <ObjectOutput 
-          objectLabel={objectLabel} 
-          color={translatedColor || color}
-          originalColor={color}
-          visible={showOutput || isLoading}
-          isLoading={isLoading}
-          onDismiss={resetOutput}
-        />
-
-        <LanguageSelector
-          visible={languageSelectorVisible}
-          onClose={() => setLanguageSelectorVisible(false)}
-          onSelect={handleLanguageSelect}
-          selectedLanguage={selectedLanguage}
-        />
       </CameraView>
     </GestureHandlerRootView>
   );
@@ -770,7 +600,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(0, 0, 0, 0.3)",
     borderRadius: 16,
-    paddingVertical: 16,
+    paddingVertical: 8,
     width: "60%",
     alignSelf: "center",
   },
@@ -799,13 +629,16 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "rgba(255, 255, 255, 0.3)",
   },
+  captureButtonDisabled: {
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+  },
   captureButtonInner: {
     width: 52,
     height: 52,
     borderRadius: 26,
     backgroundColor: "white",
   },
-  captureButtonDisabled: {
+  captureButtonInnerDisabled: {
     backgroundColor: "rgba(255, 255, 255, 0.3)",
   },
   flipButton: {
@@ -845,22 +678,43 @@ const styles = StyleSheet.create({
   mask: {
     position: "absolute",
     zIndex: 1,
-  },
-  languageButton: {
-    position: "absolute",
-    top: 50,
-    right: 20,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "rgba(255, 255, 255, 0.3)",
-    zIndex: 10,
   },
-  languageFlag: {
-    fontSize: 28,
+  detectionBox: {
+    position: "absolute",
+    borderWidth: 3,
+    borderColor: "#00ff00",
+    borderRadius: 4,
+  },
+  detectionLabel: {
+    position: "absolute",
+    top: -28,
+    left: 0,
+    backgroundColor: "#00ff00",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  detectionText: {
+    color: "#000",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  modeToggle: {
+    position: "absolute",
+    top: 60,
+    right: 20,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  modeText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "600",
   },
 });
